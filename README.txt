@@ -1,11 +1,5 @@
-A/B Coach — התקנה והפעלה
+A/B Coach Studio v2
 
-1. העלה את כל הקבצים לתיקייה באתר HTTPS סטטי (GitHub Pages / Netlify / Cloudflare Pages).
-2. פתח את כתובת האתר באייפון באמצעות Safari, בחר שיתוף > הוסף למסך הבית.
-3. האפליקציה תעבוד גם ללא אינטרנט לאחר טעינה ראשונית.
-4. נתונים נשמרים ב-IndexedDB של אותו דפדפן ואותו אתר. לא מדובר בגיבוי ענן.
-5. בתפריט תוכניות ניתן לייצא ולייבא גיבוי JSON. מומלץ לבצע זאת לעיתים קרובות.
-6. כדי לשתף תוצאות עם ChatGPT: תוכניות > העתק סיכום אימון אחרון לצ׳אט.
-7. אין סנכרון אוטומטי עם שיחת ChatGPT; לכך דרושים שרת, אימות משתמשים, API ואישור גישה.
-
-שים לב: פתיחת index.html ישירות כקובץ אינה מבטיחה תמיכה ב-Service Worker או אחסון קבוע. יש לארח ב-HTTPS.
+Upload all six files to GitHub repository root, replacing existing files.
+GitHub Pages serves the PWA. Chat history seed: 2026-10-07 A, 2026-10-08 Core, 2026-10-18 A, 2026-10-19 B. Historical session times are placeholders; dates are known.
+Data is stored locally in IndexedDB, not in a cloud database. Export JSON backup regularly.
