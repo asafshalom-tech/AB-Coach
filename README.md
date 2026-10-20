@@ -27,3 +27,13 @@ Version 3 reads the original `ab-coach-database` / `app` / `state` IndexedDB obj
 
 ## Security and scope
 The cloud auth REST interface depends on an independently provisioned Supabase project, and user RLS rules. No service credentials are embedded. Supabase account sessions are saved in browser localStorage for convenience; avoid using on shared devices. Passwords are never stored by the app. GitHub Pages only hosts static app files, not the user's data. Browser notifications are not implemented; rest timer is in-app only.
+
+
+## Version 3.2 — Safe automatic two-way sync
+
+* With cloud sync enabled, polls the authenticated account every 20 seconds and whenever the app becomes visible, focused, or reconnects. Updates received from ChatGPT through Supabase become visible without manually tapping Cloud Pull.
+* Automatic cloud pulls are **blocked** during an active workout, while there are pending local writes, or while the user is typing in a field. The app shows a conflict indicator; manual Cloud Pull and Cloud Push remain available.
+* Auto-push uses optimistic concurrency with the `updated_at` column: a `PATCH` with a timestamp match fails safely if another device or chat session writes first. This protects against most concurrent overwrites.
+* Preserves a last local snapshot under `abcoach-v3-before-cloud-pull` before replacing it with cloud data. Manual Cloud Pull continues to replace the local profile, so export JSON first.
+* The remote data model is still one JSON blob per account, **not** per-set merge. Concurrent edits still require a manual conflict decision. The chat is not autonomously monitored; ChatGPT reads/writes Supabase only when invoked with an authorized tool.
+* Upgrading the site does not change the Supabase project or require re-running `supabase_setup.sql`. Existing login settings and training records remain stored on their respective devices/cloud.
