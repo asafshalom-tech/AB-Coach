@@ -1,4 +1,4 @@
-/* A/B COACH STUDIO v3.2 — conflict-aware two-way cloud sync */
+/* A/B COACH STUDIO v3.3 — observable, safer two-way cloud sync */
 'use strict';
 const LEGACY_KEY='abcoach-v1', DB_NAME='ab-coach-database', STORE='app', STATE_KEY='state';
 const CONFIG_KEY='abcoach-v3-cloud-settings', OLD_SNAPSHOT='abcoach-migration-v2-snapshot', AUTO_POLL_MS=20000;
@@ -35,8 +35,8 @@ const setsText=e=>(e.sets||[]).map((x,i)=>e.skipped?.includes(i)?'דולג':x===
 const baselinePlan=()=>Object.fromEntries(Object.entries(BASE).map(([type,items])=>[type,items.map((a,i)=>({id:`${type}-${i}`,name:a[0],weight:a[1],unit:a[2],targets:a[3].slice(),baseline:a[3].slice(),minReps:a[2]==='שניות'?60:Math.min(8,...a[3]),maxReps:a[2]==='שניות'?300:Math.max(12,...a[3]),increment:a[2]==='lb'?2.5:a[2]==='משקל גוף'?0:([15,17.5,12.5,25].includes(a[1])?1.25:2.5)}))]));
 const freshState=()=>({schema:3,plans:baselinePlan(),history:[],active:null,preferences:{name:'',weeklyGoal:4,restSeconds:120,vibrate:true,autoAdvance:true,showRir:true},tab:'home',createdAt:new Date().toISOString(),introComplete:false,lastResult:null});
 let state=freshState(),tab='home',db=null,writeQueue=Promise.resolve(),storageError=false,hasLegacy=false;
-let session={filter:'all',chosenExercise:'',insightMetric:'volume',restUntil:0,lastSaved:null,toastTimer:0,homeProfile:'',cloudPending:false,cloudBusy:false,cloudPollBusy:false,changeSeq:0};
-let cloud={url:'',anon:'',access_token:'',refresh_token:'',expires_at:0,user_id:'',lastRemoteUpdatedAt:'',enabled:false,status:'offline',pending:false,remotePending:false};
+let session={filter:'all',chosenExercise:'',insightMetric:'volume',restUntil:0,lastSaved:null,toastTimer:0,homeProfile:'',cloudPending:false,cloudBusy:false,cloudPollBusy:false,changeSeq:0,cloudLastCheck:'',cloudLastError:'',cloudLastResult:'',lastFieldEdit:0};
+let cloud={url:'',anon:'',access_token:'',refresh_token:'',expires_at:0,user_id:'',lastRemoteUpdatedAt:'',enabled:false,status:'offline',pending:false,remotePending:false,lastSyncedAt:''};
 function traceError(error){console.error('[AB Coach]',error)}
 function toast(message){let t=$('#toast');if(!t)return;t.textContent=message;t.classList.add('show');clearTimeout(session.toastTimer);session.toastTimer=setTimeout(()=>t.classList.remove('show'),2900)}
 function feedbackPulse(){if(state.preferences?.vibrate&&navigator.vibrate)try{navigator.vibrate(30)}catch(e){}}
@@ -111,7 +111,14 @@ function svgChart(points,format='value'){
  let grid=[0,.25,.5,.75,1].map(z=>`<line class="gridline" x1="${P.left}" y1="${P.top+z*(H-P.top-P.bottom)}" x2="${W-P.right}" y2="${P.top+z*(H-P.top-P.bottom)}"/><text x="${P.left-3}" y="${P.top+z*(H-P.top-P.bottom)-4}" class="chart-label" text-anchor="end">${fmt(vmax-z*span)}</text>`).join('');
  return `<div class="chart-canvas" dir="ltr"><svg viewBox="0 0 ${W} ${H}" aria-label="גרף ביצועים לפי תאריך" role="img" preserveAspectRatio="xMidYMid meet">${grid}<polyline class="plotline" points="${poly}"/>${dots}<text x="${P.left}" y="${H-9}" class="chart-label">${dayOf(points[0].date)}</text><text x="${W-P.right}" y="${H-9}" class="chart-label" text-anchor="end">${dayOf(points.at(-1).date)}</text></svg></div>`
 }
-function status(){let e=$('#cloudIndicator');if(!e)return;let collision=cloud.remotePending||cloud.status==='conflict';e.className='cloud-status '+(cloud.status==='online'&&!collision&&!cloud.pending?'online':collision||cloud.status==='problem'?'problem':'');e.textContent=collision?'● שינוי בענן — נדרש טיפול':cloud.pending?'● שינויים ממתינים לענן':cloud.status==='online'?'● סנכרון פעיל':cloud.status==='problem'?'● בעיית סנכרון':'● נשמר במכשיר'}
+function syncClock(value){if(!value)return 'טרם נרשם';const d=new Date(value);return Number.isNaN(d.getTime())?'לא זמין':d.toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}
+function updateSyncDetails(){const e=$('#syncDiagnostics');if(!e)return;
+ const checked=session.cloudLastCheck?syncClock(session.cloudLastCheck):'עוד לא בוצעה בדיקה בהפעלה זו';
+ const synced=syncClock(cloud.lastSyncedAt||cloud.lastRemoteUpdatedAt);
+ const observed=syncClock(session.cloudRemoteVersion);
+ const waiting=cloud.remotePending?'שינוי בענן ממתין; יש לשמור גיבוי ולבחור הורדה ידנית אם אין אימון לא שמור':cloud.pending?'ממתין להעלאה של שינויים מקומיים':state.active?'קיים אימון פעיל — קליטת עדכונים נדחית':session.cloudLastError?'שגיאת בדיקה: '+session.cloudLastError:session.cloudLastResult||'ממתין לבדיקה';
+ e.innerHTML='<div><span>בדיקה אחרונה</span><strong>'+esc(checked)+'</strong></div><div><span>סנכרון שהוחל במכשיר</span><strong>'+esc(synced)+'</strong></div><div><span>עדכון אחרון שנמצא בענן</span><strong>'+esc(observed)+'</strong></div><p>'+esc(waiting)+'</p>';}
+function status(){let e=$('#cloudIndicator');if(!e)return;let collision=cloud.remotePending||cloud.status==='conflict';e.className='cloud-status '+(cloud.status==='online'&&!collision&&!cloud.pending?'online':collision||cloud.status==='problem'?'problem':'');e.textContent=collision?'● שינוי בענן — נדרש טיפול':cloud.pending?'● שינויים ממתינים לענן':cloud.status==='online'?'● סנכרון פעיל':cloud.status==='problem'?'● בעיית סנכרון':'● נשמר במכשיר';updateSyncDetails()}
 function section(title,more=''){return `<div class="section-heading"><h2>${title}</h2>${more}</div>`}
 function chips(text,cls=''){return `<span class="chip ${cls}">${esc(text)}</span>`}
 function empty(emoji,title,explain){return `<div class="empty"><div class="emoji">${emoji}</div><strong>${title}</strong><p class="small">${explain}</p></div>`}
@@ -216,12 +223,12 @@ function renderSettings(){let p=state.preferences||{};let connected=!!cloud.user
  <div class="field"><label for="cloudUrl">Supabase Project URL</label><input id="cloudUrl" autocomplete="off" inputmode="url" placeholder="https://xxxx.supabase.co" value="${esc(cloud.url||'')}" /></div>
  <div class="field"><label for="cloudAnon">Publishable / anon key (מפתח ציבורי בלבד)</label><input id="cloudAnon" autocomplete="off" type="text" placeholder="sb_publishable_... או מפתח anon" value="${esc(cloud.anon||'')}" /></div><button class="btn tertiary slim" data-action="cloud-config">שמור פרטי פרויקט</button>
  <div class="divider"></div><div class="eyebrow">PERSONAL ACCOUNT</div>
- ${connected?`<div class="hint space">מחובר לחשבון Supabase. ${cloud.enabled?'האפליקציה בודקת עדכונים בענן כל 20 שניות וכשחוזרים לחלון. שינויים מקומיים נשלחים אוטומטית.':'הסנכרון האוטומטי אינו פעיל.'}${cloud.remotePending?' זוהה עדכון בענן; הוא לא יחליף אימון פעיל או שינויים מקומיים שלא נשלחו. מומלץ לבצע גיבוי ולפתור את ההתנגשות.':''}</div><div class="btn-grid space"><button class="btn secondary slim" data-action="cloud-pull">הורד נתונים מהענן</button><button class="btn tertiary slim" data-action="cloud-push">העלה נתונים לענן</button><button class="btn danger slim" data-action="cloud-logout">התנתק</button></div>`:
+ ${connected?`<div class="hint space">מחובר לחשבון Supabase. ${cloud.enabled?'האפליקציה בודקת עדכונים כל כ־20 שניות כשהיא פתוחה, וגם כשחוזרים אליה. שינויים מקומיים נשלחים אוטומטית.':'הסנכרון האוטומטי אינו פעיל.'}${cloud.remotePending?' זוהה עדכון בענן; הוא לא יחליף אימון פעיל או שינויים מקומיים שלא נשלחו. מומלץ לבצע גיבוי ולפתור את ההתנגשות.':''}</div><div id="syncDiagnostics" class="sync-diagnostics space" aria-live="polite"></div><button class="btn sync-now space" data-action="cloud-check">↻ בדוק סנכרון עכשיו</button><div class="btn-grid space"><button class="btn secondary slim" data-action="cloud-pull">הורד נתונים מהענן</button><button class="btn tertiary slim" data-action="cloud-push">העלה נתונים לענן</button><button class="btn danger slim" data-action="cloud-logout">התנתק</button></div>`:
  `<div class="form-grid two space"><div class="field"><label for="cloudEmail">כתובת דוא״ל</label><input id="cloudEmail" type="email" autocomplete="email" placeholder="you@example.com"></div><div class="field"><label for="cloudPassword">סיסמה (לפחות 8 תווים)</label><input id="cloudPassword" type="password" autocomplete="current-password" placeholder="••••••••" /></div></div><div class="btn-grid"><button class="btn" data-action="cloud-login">התחבר</button><button class="btn secondary" data-action="cloud-signup">הרשמה</button></div><p class="micro muted space">אם אישור דוא״ל מופעל ב־Supabase, יישלח מייל אימות לפני שאפשר להתחבר. הסיסמה אינה נשמרת באפליקציה.</p>`}
  <p class="small muted space">בחשבון חדש אפשר להתחיל עם תוכנית אישית נפרדת. כל משתמש חייב להשתמש בחשבון Supabase משלו כדי שהנתונים יהיו מופרדים באמצעות כללי RLS. הסנכרון מזהה עדכונים ממכשיר אחר ומונע דריסה שקטה.</p></div>
  <div class="card"><h2>גיבוי, פרטיות ונתונים</h2><p class="small muted">האימונים נשמרים ב־IndexedDB בדפדפן. מחיקת נתוני האתר או מעבר טלפון ללא סנכרון עלולים למחוק אותם. גיבוי JSON הוא הדרך לשמור עותק עצמאי. אין סנכרון אוטומטי עם שיחת ChatGPT; אפשר להעתיק אליה סיכום אימון ידנית.</p>
  <div class="btn-grid"><button class="btn secondary" data-action="export">↓ ייצוא גיבוי JSON</button><label class="btn tertiary" style="cursor:pointer">↑ ייבוא גיבוי<input id="importFile" type="file" accept=".json,application/json" hidden></label></div>
- <div class="btn-grid space"><button class="btn tertiary slim" data-action="copy">העתק סיכום אימון אחרון לצ׳אט</button><button class="btn danger slim" data-action="reset">איפוס נתונים במכשיר</button></div><p class="micro muted space">גרסה 3.2 · סנכרון דו־כיווני מוגן · אפליקציית PWA · עבודת אופליין · שמירה מקומית</p></div>`
+ <div class="btn-grid space"><button class="btn tertiary slim" data-action="copy">העתק סיכום אימון אחרון לצ׳אט</button><button class="btn danger slim" data-action="reset">איפוס נתונים במכשיר</button></div><p class="micro muted space">גרסה 3.3 · אבחון סנכרון ושמירה מוגנת · אפליקציית PWA · עבודת אופליין · שמירה מקומית</p></div>`
 }
 function showModal(html){$('#modalLayer').innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><button class="close" type="button" data-action="close-modal" aria-label="סגור">×</button>${html}</div></div>`;$('#modalLayer .modal-backdrop').addEventListener('click',e=>{if(e.target.classList.contains('modal-backdrop'))closeModal()})}
 function closeModal(){$('#modalLayer').innerHTML=''}
@@ -246,11 +253,11 @@ async function copyReport(uid){let w=state.history.find(w=>w.uid===uid)||state.h
 function verifyImport(uid){let w=state.history.find(w=>w.uid===uid);if(!w)return;if(confirm('האם בדקת בפועל את הסטים והמשקלים של הרשומה? אם לא, מומלץ להשאיר אותה לא מאומתת.')){w.confidence='verified-by-user';save();render();toast('הרשומה סומנה כמאומתת על ידך')}}
 function persistCloud(){let saved={...cloud};delete saved.status;try{localStorage.setItem(CONFIG_KEY,JSON.stringify(saved))}catch(e){traceError(e)}}
 function parseCloudUrl(url){let u=new URL(url);if(u.protocol!=='https:'||!/^[a-z0-9-]+\.supabase\.co$/i.test(u.hostname))throw Error('הזן כתובת Project URL של supabase.co עם https');return u.origin}
-function storeCloudConfig(){try{let url=parseCloudUrl($('#cloudUrl').value.trim()),anon=$('#cloudAnon').value.trim();if(!anon||anon.length<20)throw Error('יש להזין מפתח Publishable/anon תקין');if(/service_role/i.test(anon))throw Error('אין להשתמש במפתח service_role — רק Publishable/anon');try{let parts=anon.split('.');if(parts.length===3&&JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/'))).role==='service_role')throw Error('המפתח הזה הוא service_role. השתמש במפתח הציבורי בלבד')}catch(e){if(e.message?.includes('service_role'))throw e}let changed=url!==cloud.url||anon!==cloud.anon;cloud.url=url;cloud.anon=anon;if(changed){cloud.access_token='';cloud.refresh_token='';cloud.user_id='';cloud.enabled=false;cloud.pending=false;cloud.remotePending=false;cloud.lastRemoteUpdatedAt='';cloud.status='offline'}persistCloud();render();toast('פרטי הפרויקט נשמרו במכשיר')}catch(e){toast(e.message||'פרטי פרויקט לא תקינים')}}
+function storeCloudConfig(){try{let url=parseCloudUrl($('#cloudUrl').value.trim()),anon=$('#cloudAnon').value.trim();if(!anon||anon.length<20)throw Error('יש להזין מפתח Publishable/anon תקין');if(/service_role/i.test(anon))throw Error('אין להשתמש במפתח service_role — רק Publishable/anon');try{let parts=anon.split('.');if(parts.length===3&&JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/'))).role==='service_role')throw Error('המפתח הזה הוא service_role. השתמש במפתח הציבורי בלבד')}catch(e){if(e.message?.includes('service_role'))throw e}let changed=url!==cloud.url||anon!==cloud.anon;cloud.url=url;cloud.anon=anon;if(changed){cloud.access_token='';cloud.refresh_token='';cloud.user_id='';cloud.enabled=false;cloud.pending=false;cloud.remotePending=false;cloud.lastRemoteUpdatedAt='';cloud.lastSyncedAt='';cloud.status='offline'}persistCloud();render();toast('פרטי הפרויקט נשמרו במכשיר')}catch(e){toast(e.message||'פרטי פרויקט לא תקינים')}}
 async function cloudRequest(path,opts={}){let response=await fetch(cloud.url+path,{...opts,headers:{apikey:cloud.anon,'Content-Type':'application/json',...(cloud.access_token?{Authorization:'Bearer '+cloud.access_token}:{}),...(opts.headers||{})}});let data=await response.text();let json;try{json=data?JSON.parse(data):null}catch{json=data}if(!response.ok)throw Error(typeof json==='object'?(json?.msg||json?.message||json?.error_description||json?.error||`HTTP ${response.status}`):`HTTP ${response.status}`);return json}
 async function cloudEnsureAuth(){if(!cloud.access_token||!cloud.user_id)throw Error('לא מחובר לחשבון');if(Date.now()<num(cloud.expires_at)-60000)return;let r=await cloudRequest('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:cloud.refresh_token})});cloud.access_token=r.access_token;cloud.refresh_token=r.refresh_token;cloud.expires_at=Date.now()+(r.expires_in||3600)*1000;persistCloud()}
 async function cloudAuth(type){try{if(!cloud.url||!cloud.anon)throw Error('קודם יש לשמור את פרטי פרויקט Supabase');let email=$('#cloudEmail')?.value.trim(),password=$('#cloudPassword')?.value||'';if(!email?.includes('@')||password.length<8)throw Error('נדרשת כתובת דוא״ל וסיסמה של 8 תווים לפחות');let r=await cloudRequest(type==='signup'?'/auth/v1/signup':'/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});if(!r.access_token||!r.user?.id){toast('ההרשמה התקבלה. בדוק את הדוא״ל לאישור החשבון, ואז התחבר.');return}
- cloud.access_token=r.access_token;cloud.refresh_token=r.refresh_token;cloud.expires_at=Date.now()+(r.expires_in||3600)*1000;cloud.user_id=r.user.id;cloud.enabled=false;cloud.lastRemoteUpdatedAt='';cloud.status='offline';persistCloud();render();toast('התחברת! בחר כעת אם למשוך נתונים מהענן או להעלות אותם.')}catch(e){traceError(e);toast('התחברות נכשלה: '+(e.message||'נסה שוב'))}}
+ cloud.access_token=r.access_token;cloud.refresh_token=r.refresh_token;cloud.expires_at=Date.now()+(r.expires_in||3600)*1000;cloud.user_id=r.user.id;cloud.enabled=false;cloud.lastRemoteUpdatedAt='';cloud.lastSyncedAt='';cloud.status='offline';persistCloud();render();toast('התחברת! בחר כעת אם למשוך נתונים מהענן או להעלות אותם.')}catch(e){traceError(e);toast('התחברות נכשלה: '+(e.message||'נסה שוב'))}}
 async function cloudGet(){await cloudEnsureAuth();let rows=await cloudRequest('/rest/v1/coaching_states?select=data,updated_at&user_id=eq.'+encodeURIComponent(cloud.user_id)+'&limit=1',{method:'GET',cache:'no-store'});return Array.isArray(rows)?rows[0]||null:null}
 async function cloudVersion(){await cloudEnsureAuth();let rows=await cloudRequest('/rest/v1/coaching_states?select=updated_at&user_id=eq.'+encodeURIComponent(cloud.user_id)+'&limit=1',{method:'GET',cache:'no-store'});return Array.isArray(rows)?rows[0]?.updated_at||'':''}
 function validRemote(row){return !!(row?.data?.plans?.A&&Array.isArray(row?.data?.history))}
@@ -262,7 +269,7 @@ async function applyRemote(row,{manual=false}={}){
  // Keep an emergency local copy for recovery; do not transmit credentials to server.
  try{localStorage.setItem('abcoach-v3-before-cloud-pull',JSON.stringify(state))}catch(e){traceError(e)}
  let next=normalizeState(clone(row.data));state=next;tab=manual?'home':(TAB_NAMES[tab]?tab:'home');
- cloud.lastRemoteUpdatedAt=row.updated_at;cloud.remotePending=false;cloud.pending=false;cloud.enabled=true;cloud.status='online';persistCloud();save({sync:false});render();
+ cloud.lastRemoteUpdatedAt=row.updated_at;cloud.lastSyncedAt=new Date().toISOString();cloud.remotePending=false;cloud.pending=false;cloud.enabled=true;cloud.status='online';persistCloud();save({sync:false});render();
  toast(manual?'הנתונים הורדו מהענן — סנכרון הופעל':'עודכנו נתונים חדשים מהענן ✓');return true;
 }
 async function cloudWrite(force=false){
@@ -286,7 +293,7 @@ async function cloudWrite(force=false){
      rows=await cloudRequest('/rest/v1/coaching_states?user_id=eq.'+encodeURIComponent(cloud.user_id)+'&updated_at=eq.'+encodeURIComponent(remote),{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({data:snapshot})});
    }
    if(!Array.isArray(rows)||rows.length!==1){cloud.remotePending=true;cloud.status='conflict';persistCloud();toast('שינוי מקביל זוהה בענן — השמירה נעצרה.');return false}
-   cloud.lastRemoteUpdatedAt=rows[0].updated_at;cloud.remotePending=false;
+   cloud.lastRemoteUpdatedAt=rows[0].updated_at;cloud.lastSyncedAt=new Date().toISOString();cloud.remotePending=false;
    cloud.pending=session.changeSeq!==seq;
    cloud.enabled=true;cloud.status=cloud.pending?'pending':'online';persistCloud();status();
    if(cloud.pending)scheduleCloudPush();return true;
@@ -295,26 +302,41 @@ async function cloudWrite(force=false){
 }
 async function cloudPushManual(){if(!cloud.user_id)return toast('יש להתחבר קודם');if(!confirm('להעלות את כל נתוני המכשיר לענן? זה יחליף נתונים שנמצאים בענן. האם שמרת גיבוי JSON ובדקת שאין שם אימונים חדשים?'))return;clearTimeout(pushTimeout);pushTimeout=null;let ok=await cloudWrite(true);if(ok){render();toast('הנתונים הועלו; סנכרון אוטומטי הופעל')}}
 async function cloudPullManual(){if(!cloud.user_id)return toast('יש להתחבר קודם');if(state.active)return toast('יש אימון פעיל; סיים אותו לפני החלפת נתונים מהענן.');if(!confirm('להוריד את כל הנתונים מהענן ולהחליף את הנתונים המקומיים? קודם מומלץ לייצא גיבוי JSON.'))return;try{clearTimeout(pushTimeout);pushTimeout=null;let row=await cloudGet();if(!row?.data){toast('אין עדיין גיבוי ענן לחשבון הזה');return}await applyRemote(row,{manual:true})}catch(e){traceError(e);toast('ההורדה נכשלה: '+e.message)}}
-function cloudLogout(){if(!confirm('להתנתק מסנכרון הענן? הנתונים המקומיים יישארו במכשיר.'))return;clearTimeout(pushTimeout);pushTimeout=null;cloud.access_token='';cloud.refresh_token='';cloud.expires_at=0;cloud.user_id='';cloud.enabled=false;cloud.pending=false;cloud.remotePending=false;cloud.status='offline';cloud.lastRemoteUpdatedAt='';persistCloud();render();toast('התנתקת. הנתונים נשארו שמורים במכשיר.')}
+function cloudLogout(){if(!confirm('להתנתק מסנכרון הענן? הנתונים המקומיים יישארו במכשיר.'))return;clearTimeout(pushTimeout);pushTimeout=null;cloud.access_token='';cloud.refresh_token='';cloud.expires_at=0;cloud.user_id='';cloud.enabled=false;cloud.pending=false;cloud.remotePending=false;cloud.status='offline';cloud.lastRemoteUpdatedAt='';cloud.lastSyncedAt='';persistCloud();render();toast('התנתקת. הנתונים נשארו שמורים במכשיר.')}
 let pushTimeout=null,watchInterval=null;
 function scheduleCloudPush(){clearTimeout(pushTimeout);pushTimeout=setTimeout(async()=>{pushTimeout=null;if(!cloud.enabled||cloud.remotePending)return;await cloudWrite()},2200)}
-async function checkCloudUpdates(){
- if(!cloud.enabled||!cloud.access_token||!cloud.user_id||session.cloudPollBusy||session.cloudBusy||document.visibilityState==='hidden'||!navigator.onLine)return;
- session.cloudPollBusy=true;
+async function checkCloudUpdates({manual=false}={}){
+ if(!cloud.enabled||!cloud.access_token||!cloud.user_id){if(manual)toast('יש להפעיל סנכרון בענן לפני הבדיקה');return}
+ if(session.cloudPollBusy||session.cloudBusy){if(manual)toast('יש כבר פעולת סנכרון — נסה שוב בעוד רגע');return}
+ if(document.visibilityState==='hidden'||!navigator.onLine){if(manual)toast('אין חיבור אינטרנט או שהאפליקציה ברקע');return}
+ session.cloudPollBusy=true;session.cloudLastError='';
  try{
-   const remote=await cloudVersion();
-   if(!remote||remote===cloud.lastRemoteUpdatedAt){
-     if(cloud.pending&&!cloud.remotePending&&!pushTimeout)scheduleCloudPush();
-     return;
-   }
-   if(cloud.pending||state.active||pushTimeout||document.activeElement?.matches?.('input, textarea, select, [contenteditable=true]')){
-     cloud.remotePending=true;cloud.status='conflict';persistCloud();status();
-     if(!session.conflictNotified){toast('יש שינוי בענן. הוא ממתין כדי לא לפגוע באימון או בשינויים המקומיים.');session.conflictNotified=true}
-     return;
-   }
-   let row=await cloudGet();if(row&&row.updated_at!==cloud.lastRemoteUpdatedAt){await applyRemote(row);session.conflictNotified=false}
- }catch(e){traceError(e);cloud.status='problem';status()}
- finally{session.cloudPollBusy=false}
+  const remote=await cloudVersion();
+  session.cloudLastCheck=new Date().toISOString();session.cloudRemoteVersion=remote;
+  if(!remote){session.cloudLastResult='אין עדיין נתונים בענן';return}
+  if(remote===cloud.lastRemoteUpdatedAt){
+   session.cloudLastResult='מעודכן — גרסת המכשיר זהה לענן';
+   if(cloud.remotePending&&!cloud.pending&&!state.active){cloud.remotePending=false;cloud.status='online';persistCloud()}
+   if(cloud.pending&&!cloud.remotePending&&!pushTimeout)scheduleCloudPush();
+   if(manual)toast('הנתונים באייפון מעודכנים ✓');return;
+  }
+  // A mere focused field must not prevent downloading forever. Only recent typing may defer.
+  const editing=!!document.activeElement?.matches?.('input, textarea, select, [contenteditable=true]')&&Date.now()-session.lastFieldEdit<5000;
+  if(cloud.pending||state.active||pushTimeout||editing){
+   cloud.remotePending=true;cloud.status='conflict';persistCloud();
+   session.cloudLastResult=state.active?'עדכון בענן ממתין לסיום אימון פעיל':cloud.pending||pushTimeout?'עדכון בענן ממתין לשינויים מקומיים':'עדכון בענן ממתין לסיום עריכת שדה';
+   if(manual)toast(session.cloudLastResult);
+   else if(!session.conflictNotified){toast('יש שינוי בענן. הוא ממתין כדי לא לפגוע בנתונים המקומיים.');session.conflictNotified=true}
+   return;
+  }
+  const row=await cloudGet();
+  if(row&&row.updated_at!==cloud.lastRemoteUpdatedAt){
+   const ok=await applyRemote(row);
+   if(ok){session.cloudLastResult='התקבל עדכון חדש מהענן';session.conflictNotified=false}
+  }
+  if(manual&&row?.updated_at===cloud.lastRemoteUpdatedAt)toast('העדכון מהענן הוחל בהצלחה ✓');
+ }catch(e){traceError(e);session.cloudLastError=String(e.message||e).slice(0,130);session.cloudLastResult='בדיקת ענן נכשלה';cloud.status='problem';if(manual)toast('בדיקת סנכרון נכשלה: '+session.cloudLastError)}
+ finally{session.cloudPollBusy=false;status()}
 }
 function startCloudWatcher(){
  if(watchInterval)clearInterval(watchInterval);
@@ -358,9 +380,10 @@ function listen(){document.addEventListener('click',async event=>{let button=eve
  if(a==='cloud-config'){storeCloudConfig();return}
  if(a==='cloud-signup'||a==='cloud-login'){await cloudAuth(a==='cloud-signup'?'signup':'login');return}
  if(a==='cloud-push'){await cloudPushManual();return}
+ if(a==='cloud-check'){await checkCloudUpdates({manual:true});return}
  if(a==='cloud-pull'){await cloudPullManual();return}
  if(a==='cloud-logout'){cloudLogout();return}
- });document.addEventListener('change',event=>{if(event.target.id==='exerciseChoice'){session.chosenExercise=event.target.value;render()}if(event.target.id==='importFile')importData(event.target.files?.[0])});
+ });document.addEventListener('input',event=>{if(event.target?.matches?.('input, textarea, select, [contenteditable=true]'))session.lastFieldEdit=Date.now()});document.addEventListener('change',event=>{if(event.target.id==='exerciseChoice'){session.chosenExercise=event.target.value;render()}if(event.target.id==='importFile')importData(event.target.files?.[0])});
  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('#modalLayer .modal'))closeModal();if(event.key==='Enter'&&event.target?.id==='repValue'){event.preventDefault();record()}});
  document.addEventListener('visibilitychange',()=>{if(!document.hidden){tickTimer();if(cloud.enabled&&cloud.access_token)cloudEnsureAuth().catch(e=>{cloud.status='problem';status()})}});
  setInterval(tickTimer,1000);

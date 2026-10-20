@@ -37,3 +37,15 @@ The cloud auth REST interface depends on an independently provisioned Supabase p
 * Preserves a last local snapshot under `abcoach-v3-before-cloud-pull` before replacing it with cloud data. Manual Cloud Pull continues to replace the local profile, so export JSON first.
 * The remote data model is still one JSON blob per account, **not** per-set merge. Concurrent edits still require a manual conflict decision. The chat is not autonomously monitored; ChatGPT reads/writes Supabase only when invoked with an authorized tool.
 * Upgrading the site does not change the Supabase project or require re-running `supabase_setup.sql`. Existing login settings and training records remain stored on their respective devices/cloud.
+
+
+## Version 3.3 — Cloud sync diagnostics
+
+* Adds a dedicated live diagnostics panel in Settings showing the last check time, last applied synchronization time, most recently observed remote update time, and whether a conflict or active workout is blocking updates.
+* Adds a read-first **Check sync now** button. It never forces an overwrite: an update is downloaded only if there are no active workout, pending local writes, or recent unsaved field edits.
+* Fixes an issue where an input field left in focus could block automatic pulls indefinitely. The pull is now deferred only for a short period after actual typing.
+* Retains 20-second checks only while the app is in the foreground (iOS may suspend background JavaScript).
+* All existing local storage and Supabase database schemas are preserved. No SQL migration needed.
+* Version 3.3 changes the service-worker cache name and references to JS/CSS to help installed PWAs acquire updates.
+
+**Limitations:** No automatic per-set merge. Backup JSON before choosing a manual cloud pull/push. Polling is not a push notification; iOS suspends it while the app is closed or in the background.
