@@ -1,51 +1,23 @@
-# A/B Coach Studio 3.1
+# A/B Coach Studio 3.4 — Performance Blue
 
-A privacy-conscious Hebrew workout tracker PWA that works offline using IndexedDB and optionally syncs with Supabase.
+שדרוג על בסיס גרסה 3.3, ללא שינוי בטבלת Supabase או בפרטי הגישה.
 
-## Features
-- Mobile-first RTL premium dark UI; dashboard with weekly goal, training stats, and next recommended A/B workout.
-- Workout logging: quick per-set reps, optional RIR, exercise queue, progress, skip without logging zero, edit/undo, rest timer, vibration when supported, session notes.
-- Objective performance scoring: 72% capped target fulfillment + 28% set completion; **technique is not inferred**. Weight and performance comparisons are separate.
-- Gradual overload coaching, personal records (best working weight, reps at same load, volume), per-exercise trend graphs and post-workout summary.
-- Editable A, B, Core plans; reorder and add exercises; separate on-device data and optional per-user cloud accounts.
-- Data-provenance labels on legacy chat imports; provisional data excluded from PR calculations.
-- JSON export and import, migration from previous IndexedDB key without clearing existing records.
+## מה חדש
+- עיצוב Performance Blue: מצב בהיר כברירת מחדל ומצב כהה Midnight Blue, בחירה בהגדרות.
+- טיימר מנוחה: 180 שניות כברירת מחדל. שדרוג של ערך ברירת המחדל הקודם 120 שניות ל־180; ערכים מותאמים אחרים נשמרים.
+- התראה בצליל כשהמנוחה מסתיימת והאפליקציה פעילה. רטט במכשירים עם תמיכה ב־Vibration API; ב־iPhone PWA אין הבטחה לרטט, והצליל תלוי במגבלות iOS ובהרשאות שמע.
+- משקל נפרד לכל סט: בחירת משקל ליד הזנת החזרות; עריכת תוצאות של סט והמשקל שלו; ייצוא משקלים פרטניים בסיכום; חישוב נפח עבודה לפי משקל לכל סט.
+- תצוגת תרגילים לפי זמן בתצורת דקות:שניות (למשל Plank 3:00).
+- ריווח וניווט תחתון שמותאמים ל־safe-area של iPhone.
+- סנכרון Supabase והיסטוריית אימונים ישנים נשמרו; אין צורך לשנות את סכמת בסיס הנתונים.
 
-## Deploy
-Upload all files to the repository root and enable **GitHub Pages** > Deploy from branch > main > root. No build step required. The service worker includes a new cache name and precaches HTML/CSS/JS for offline use.
+## התקנה
+1. לפני ההחלפה ייצא גיבוי JSON מתוך האפליקציה.
+2. חלץ והעלה את תוכן ה־ZIP לתיקיית השורש של מאגר GitHub Pages הקיים; שמור על שמות הקבצים.
+3. התחבר לחשבון הענן אם התבקשת, ובדוק ששבעת האימונים הקודמים מופיעים.
+4. בהגדרות בחר מצב בהיר או כהה; בדוק שתזמון המנוחה הוא 180 שניות.
 
-## Cloud setup (optional)
-1. Create a Supabase project using a free plan (subject to current free-tier limits).
-2. Run `supabase_setup.sql` in Supabase SQL Editor (enables RLS).
-3. In the app's Settings, enter `Project URL` and the **public** Publishable/anon key, *never* the service_role key.
-4. Each person signs up with a distinct email; if email confirmation is enabled, verify email first.
-5. On first login, explicitly choose **Upload local data** or **Download cloud data**. Auto-sync begins after choosing. Cross-device changes detected from the `updated_at` timestamp pause syncing to prevent silent overwrites.
-6. Take independent JSON backups. If two devices edit concurrently, automatic conflict **merging** is not implemented: manually choose which copy to keep. The app does not and cannot automatically access ChatGPT conversations.
-
-## Data migration
-Version 3 reads the original `ab-coach-database` / `app` / `state` IndexedDB object, automatically expands the schema, and preserves exercise order, historical records, and existing per-set logs. The first successful migration attempts to store an untouched copy in localStorage under `abcoach-migration-v2-snapshot`. The v2 source historically imported four chat sessions; the 7 Oct A session is marked **provisional** and is excluded from personal record calculations. Verify imported history before relying on it. New users choose an onboarding profile with or without chat history.
-
-## Security and scope
-The cloud auth REST interface depends on an independently provisioned Supabase project, and user RLS rules. No service credentials are embedded. Supabase account sessions are saved in browser localStorage for convenience; avoid using on shared devices. Passwords are never stored by the app. GitHub Pages only hosts static app files, not the user's data. Browser notifications are not implemented; rest timer is in-app only.
-
-
-## Version 3.2 — Safe automatic two-way sync
-
-* With cloud sync enabled, polls the authenticated account every 20 seconds and whenever the app becomes visible, focused, or reconnects. Updates received from ChatGPT through Supabase become visible without manually tapping Cloud Pull.
-* Automatic cloud pulls are **blocked** during an active workout, while there are pending local writes, or while the user is typing in a field. The app shows a conflict indicator; manual Cloud Pull and Cloud Push remain available.
-* Auto-push uses optimistic concurrency with the `updated_at` column: a `PATCH` with a timestamp match fails safely if another device or chat session writes first. This protects against most concurrent overwrites.
-* Preserves a last local snapshot under `abcoach-v3-before-cloud-pull` before replacing it with cloud data. Manual Cloud Pull continues to replace the local profile, so export JSON first.
-* The remote data model is still one JSON blob per account, **not** per-set merge. Concurrent edits still require a manual conflict decision. The chat is not autonomously monitored; ChatGPT reads/writes Supabase only when invoked with an authorized tool.
-* Upgrading the site does not change the Supabase project or require re-running `supabase_setup.sql`. Existing login settings and training records remain stored on their respective devices/cloud.
-
-
-## Version 3.3 — Cloud sync diagnostics
-
-* Adds a dedicated live diagnostics panel in Settings showing the last check time, last applied synchronization time, most recently observed remote update time, and whether a conflict or active workout is blocking updates.
-* Adds a read-first **Check sync now** button. It never forces an overwrite: an update is downloaded only if there are no active workout, pending local writes, or recent unsaved field edits.
-* Fixes an issue where an input field left in focus could block automatic pulls indefinitely. The pull is now deferred only for a short period after actual typing.
-* Retains 20-second checks only while the app is in the foreground (iOS may suspend background JavaScript).
-* All existing local storage and Supabase database schemas are preserved. No SQL migration needed.
-* Version 3.3 changes the service-worker cache name and references to JS/CSS to help installed PWAs acquire updates.
-
-**Limitations:** No automatic per-set merge. Backup JSON before choosing a manual cloud pull/push. Polling is not a push notification; iOS suspends it while the app is closed or in the background.
+## מגבלות
+- רטט באייפון PWA אינו נתמך בדרך כלל; צליל תלוי בשמע מאופשר והאפליקציה בחזית.
+- הסנכרון בענן מבוסס על רשומת נתונים אחת וניהול התנגשויות; הימנע מעריכת אותו פרופיל בשני מכשירים בו־זמנית.
+- שיאים וגרפים ישנים ממשיכים להתבסס על משקל התרגיל כאשר אין משקל נפרד מתועד.
